@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+apscheduler
+yt-dlp
+ffmpeg-python
+shortuuid
+python-multipart
