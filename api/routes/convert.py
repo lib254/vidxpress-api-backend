@@ -178,7 +178,10 @@ async def progress_stream(task_id: str):
                 data = progress_store.get(task_id, {"progress": 0, "status": "pending"})
                 yield f"data: {json.dumps(data)}\n\n"
 
+                # ✅ When complete or error, send final event & exit
                 if data.get("status") in ["complete", "error"]:
+                    # Send final event one more time before closing
+                    yield f"data: {json.dumps(data)}\n\n"
                     break
 
                 await asyncio.sleep(0.5)
@@ -186,4 +189,12 @@ async def progress_stream(task_id: str):
             logger.error(f"Error in progress stream: {str(e)}")
             yield f"data: {json.dumps({'status': 'error', 'error': str(e)})}\n\n"
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Important for nginx / Cloudflare
+        }
+    )
