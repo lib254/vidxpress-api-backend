@@ -5,7 +5,7 @@ import os
 
 logger = logging.getLogger(__name__)
 
-TEMP_DIR = Path("/tmp/files")
+STORAGE_DIR = Path(__file__).resolve().parent.parent.parent / "downloads"
 
 def convert_to_mp3(input_file: str, output_file: str) -> bool:
     """

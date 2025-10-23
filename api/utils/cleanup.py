@@ -5,7 +5,7 @@ import os
 
 logger = logging.getLogger(__name__)
 
-TEMP_DIR = Path("/tmp/files")
+STORAGE_DIR = Path(__file__).resolve().parent.parent.parent / "downloads"
 CLEANUP_INTERVAL = 3600  # 1 hour in seconds
 
 def cleanup_old_files(max_age_seconds: int = CLEANUP_INTERVAL):
@@ -16,7 +16,7 @@ def cleanup_old_files(max_age_seconds: int = CLEANUP_INTERVAL):
         current_time = time.time()
         deleted_count = 0
         
-        for file_path in TEMP_DIR.glob("*"):
+        for file_path in STORAGE_DIR.glob("*"):
             if file_path.is_file():
                 file_age = current_time - file_path.stat().st_mtime
                 

@@ -13,9 +13,9 @@ from api.utils.cleanup import cleanup_old_files
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Create temp directory if it doesn't exist
-TEMP_DIR = Path("/tmp/files")
-TEMP_DIR.mkdir(parents=True, exist_ok=True)
+# Set up persistent storage directory
+STORAGE_DIR = Path("downloads")
+STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Initialize scheduler
 scheduler = BackgroundScheduler()
@@ -32,6 +32,10 @@ async def lifespan(app: FastAPI):
     logger.info("Cleanup scheduler stopped")
 
 app = FastAPI(title="VidXpress API", version="1.0.0", lifespan=lifespan)
+
+# Mount downloads directory for static file serving
+from fastapi.staticfiles import StaticFiles
+app.mount("/files", StaticFiles(directory="downloads"), name="files")
 
 # CORS configuration
 app.add_middleware(

@@ -8,11 +8,11 @@ import os
 logger = logging.getLogger(__name__)
 
 # === Paths ===
-BASE_DIR = Path(__file__).resolve().parent
-TEMP_DIR = Path("/tmp/files")
-COOKIES_FILE = BASE_DIR / "cookies.txt"
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+STORAGE_DIR = BASE_DIR / "downloads"
+COOKIES_FILE = BASE_DIR / "api/utils/cookies.txt"
 
-TEMP_DIR.mkdir(parents=True, exist_ok=True)
+STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 # === Allowed domains for security ===
 ALLOWED_DOMAINS = [
@@ -152,7 +152,7 @@ def download_video(video_url: str, format_type: str = "mp4") -> str:
         raise ValueError(f"Domain not supported. Allowed domains: {', '.join(ALLOWED_DOMAINS)}")
     
     file_id = shortuuid.uuid()
-    output_template = str(TEMP_DIR / f"{file_id}.%(ext)s")
+    output_template = str(STORAGE_DIR / f"{file_id}.%(ext)s")
 
     try:
         base_opts = {
@@ -174,11 +174,11 @@ def download_video(video_url: str, format_type: str = "mp4") -> str:
             ydl.download([video_url])
         
         # Find the downloaded file
-        downloaded_files = list(TEMP_DIR.glob(f"{file_id}.*"))
+        downloaded_files = list(STORAGE_DIR.glob(f"{file_id}.*"))
         
         if not downloaded_files:
             logger.error(f"No files found matching pattern: {file_id}.*")
-            logger.error(f"Files in temp dir: {list(TEMP_DIR.glob('*'))}")
+            logger.error(f"Files in storage dir: {list(STORAGE_DIR.glob('*'))}")
             raise FileNotFoundError(f"Downloaded file not found for {file_id}")
         
         downloaded_file = str(downloaded_files[0])
