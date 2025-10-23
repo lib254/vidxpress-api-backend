@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 import shortuuid
 from typing import Dict
-import time
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -32,95 +32,51 @@ def validate_url(url: str) -> bool:
     url_lower = url.lower()
     return any(domain in url_lower for domain in ALLOWED_DOMAINS)
 
-def _get_cookie_strategies() -> list:
-    """
-    Return a list of cookie strategies to try in order.
-    Each strategy is a tuple of (description, yt-dlp options dict)
-    """
-    strategies = []
+def _check_cookies_file():
+    """Check if cookies file exists and is valid"""
+    if not COOKIES_FILE.exists():
+        logger.error(f"Cookies file not found at: {COOKIES_FILE}")
+        raise FileNotFoundError(
+            f"cookies.txt file is required but not found at {COOKIES_FILE}. "
+            "Please export fresh cookies from your browser and add them to the project."
+        )
     
-    # Strategy 1: Use cookies.txt file if it exists
-    if COOKIES_FILE.exists():
-        strategies.append((
-            f"cookies file at {COOKIES_FILE}",
-            {"cookiefile": str(COOKIES_FILE)}
-        ))
+    # Check if file is empty
+    if os.path.getsize(COOKIES_FILE) == 0:
+        logger.error("Cookies file is empty")
+        raise ValueError(
+            "cookies.txt file is empty. Please export fresh cookies from your browser."
+        )
     
-    # Strategy 2: Try to extract cookies from browsers
-    browsers = ["chrome", "firefox", "edge", "safari", "brave"]
-    for browser in browsers:
-        strategies.append((
-            f"cookies from {browser} browser",
-            {"cookiesfrombrowser": (browser,)}
-        ))
-    
-    # Strategy 3: No cookies (last resort)
-    strategies.append((
-        "no authentication (may fail for some videos)",
-        {}
-    ))
-    
-    return strategies
+    # Read and check for valid cookie format
+    with open(COOKIES_FILE, 'r') as f:
+        content = f.read()
+        if "# Netscape HTTP Cookie File" not in content:
+            logger.warning("Cookies file may not be in correct Netscape format")
+        
+        # Check if there are any non-comment lines
+        lines = [line for line in content.split('\n') if line.strip() and not line.startswith('#')]
+        if len(lines) == 0:
+            raise ValueError("No cookies found in cookies.txt file")
+        
+        logger.info(f"Found {len(lines)} cookies in cookies.txt")
 
-def _try_with_strategies(url: str, base_opts: dict, download: bool = False) -> Dict:
+def _get_ydl_opts(base_opts: dict) -> dict:
     """
-    Try to extract info or download with multiple cookie strategies.
-    
-    Args:
-        url: Video URL
-        base_opts: Base yt-dlp options
-        download: Whether to download (True) or just extract info (False)
-    
-    Returns:
-        Video info dict or raises exception if all strategies fail
+    Get yt-dlp options with cookies.
+    Validates cookies file before use.
     """
-    strategies = _get_cookie_strategies()
-    last_error = None
+    _check_cookies_file()
     
-    for i, (description, cookie_opts) in enumerate(strategies, 1):
-        try:
-            logger.info(f"Attempt {i}/{len(strategies)}: Using {description}")
-            
-            ydl_opts = {**base_opts, **cookie_opts}
-            
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                if download:
-                    ydl.download([url])
-                    return {"success": True}
-                else:
-                    info = ydl.extract_info(url, download=False)
-                    logger.info(f"✓ Successfully extracted metadata using {description}")
-                    return info
-                    
-        except Exception as e:
-            error_msg = str(e)
-            last_error = error_msg
-            
-            # Check if it's a bot detection error
-            if "Sign in to confirm you're not a bot" in error_msg:
-                logger.warning(f"✗ Bot detection with {description}: {error_msg[:100]}")
-                # Add a small delay before trying next strategy
-                if i < len(strategies):
-                    time.sleep(1)
-                continue
-            elif "ERROR: Unable to extract" in error_msg:
-                logger.warning(f"✗ Extraction failed with {description}: {error_msg[:100]}")
-                continue
-            else:
-                # For other errors, might be worth trying other strategies
-                logger.error(f"✗ Error with {description}: {error_msg[:150]}")
-                if i < len(strategies):
-                    continue
+    opts = {
+        **base_opts,
+        "cookiefile": str(COOKIES_FILE),
+        # Additional options to help with bot detection
+        "nocheckcertificate": True,
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    }
     
-    # All strategies failed
-    error_detail = f"All authentication strategies failed. Last error: {last_error}"
-    if "Sign in to confirm you're not a bot" in str(last_error):
-        error_detail += "\n\nSUGGESTION: Your cookies may be expired. Please:"
-        error_detail += "\n1. Export fresh cookies from your browser using a cookie exporter extension"
-        error_detail += "\n2. Replace the cookies.txt file with the fresh export"
-        error_detail += "\n3. Make sure you're logged into YouTube in your browser"
-    
-    raise Exception(error_detail)
+    return opts
 
 def get_video_metadata(video_url: str) -> Dict:
     """Extract video metadata using yt-dlp."""
@@ -134,37 +90,60 @@ def get_video_metadata(video_url: str) -> Dict:
             "extract_flat": False,
         }
         
-        info = _try_with_strategies(video_url, base_opts, download=False)
+        ydl_opts = _get_ydl_opts(base_opts)
         
-        # Extract available formats
-        formats = {"mp4": [], "audio": []}
-        if "formats" in info:
-            for fmt in info["formats"]:
-                # Filter valid formats
-                if fmt.get("vcodec") != "none" and fmt.get("acodec") != "none":
-                    height = fmt.get("height")
-                    if height:
-                        formats["mp4"].append(f"{height}p")
-                elif fmt.get("acodec") != "none":
-                    ext = fmt.get("ext", "m4a")
-                    if ext not in formats["audio"]:
-                        formats["audio"].append(ext)
-
-        formats["mp4"] = sorted(list(set(formats["mp4"])), reverse=True)
-        formats["audio"] = sorted(list(set(formats["audio"])))
-
-        duration_seconds = info.get("duration", 0)
-        duration_str = f"{duration_seconds // 60}:{duration_seconds % 60:02d}" if duration_seconds else "Unknown"
+        logger.info(f"Extracting metadata from: {video_url}")
         
-        return {
-            "title": info.get("title", "Unknown"),
-            "thumbnail": info.get("thumbnail", ""),
-            "duration": duration_str,
-            "formats": formats,
-        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=False)
+            
+            # Extract available formats
+            formats = {"mp4": [], "audio": []}
+            if "formats" in info:
+                for fmt in info["formats"]:
+                    # Filter valid formats
+                    if fmt.get("vcodec") != "none" and fmt.get("acodec") != "none":
+                        height = fmt.get("height")
+                        if height:
+                            formats["mp4"].append(f"{height}p")
+                    elif fmt.get("acodec") != "none":
+                        ext = fmt.get("ext", "m4a")
+                        if ext not in formats["audio"]:
+                            formats["audio"].append(ext)
 
+            formats["mp4"] = sorted(list(set(formats["mp4"])), reverse=True)
+            formats["audio"] = sorted(list(set(formats["audio"])))
+
+            duration_seconds = info.get("duration", 0)
+            duration_str = f"{duration_seconds // 60}:{duration_seconds % 60:02d}" if duration_seconds else "Unknown"
+            
+            return {
+                "title": info.get("title", "Unknown"),
+                "thumbnail": info.get("thumbnail", ""),
+                "duration": duration_str,
+                "formats": formats,
+            }
+
+    except FileNotFoundError as e:
+        logger.error(f"Cookies file error: {str(e)}")
+        raise ValueError(
+            "Authentication required. The cookies.txt file is missing or invalid. "
+            "Please contact the administrator to update the authentication cookies."
+        )
     except Exception as e:
-        logger.error(f"Error extracting metadata: {str(e)}")
+        error_msg = str(e)
+        logger.error(f"Error extracting metadata: {error_msg}")
+        
+        # Check if it's a bot detection error
+        if "Sign in to confirm you're not a bot" in error_msg:
+            raise ValueError(
+                "YouTube bot detection triggered. The authentication cookies have expired. "
+                "Please export fresh cookies from your browser:\n"
+                "1. Login to YouTube in your browser\n"
+                "2. Use a cookie exporter extension to export cookies.txt\n"
+                "3. Replace the cookies.txt file in the project\n"
+                "4. Redeploy the application"
+            )
         raise
 
 def download_video(video_url: str, format_type: str = "mp4") -> str:
@@ -176,39 +155,49 @@ def download_video(video_url: str, format_type: str = "mp4") -> str:
     output_template = str(TEMP_DIR / f"{file_id}.%(ext)s")
 
     try:
-        common_opts = {
+        base_opts = {
             "outtmpl": output_template,
-            "quiet": True,
-            "no_warnings": True,
+            "quiet": False,  # Enable output for debugging
+            "no_warnings": False,
         }
 
-        if format_type == "mp3":
-            base_opts = {
-                **common_opts,
-                "format": "bestaudio/best",
-                "postprocessors": [
-                    {
-                        "key": "FFmpegExtractAudio",
-                        "preferredcodec": "mp3",
-                        "preferredquality": "192",
-                    }
-                ],
-            }
-        else:  # mp4
-            base_opts = {
-                **common_opts,
-                "format": "bestvideo[ext=mp4]+bestaudio/best[ext=m4a]/mp4",
-            }
+        # Always download best video for processing
+        # We'll convert with FFmpeg later
+        base_opts["format"] = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
         
-        _try_with_strategies(video_url, base_opts, download=True)
+        ydl_opts = _get_ydl_opts(base_opts)
+        
+        logger.info(f"Downloading video: {video_url}")
+        logger.info(f"Output template: {output_template}")
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([video_url])
         
         # Find the downloaded file
-        for file in TEMP_DIR.glob(f"{file_id}.*"):
-            logger.info(f"Downloaded file: {file}")
-            return str(file)
+        downloaded_files = list(TEMP_DIR.glob(f"{file_id}.*"))
         
-        raise FileNotFoundError(f"Downloaded file not found for {file_id}")
+        if not downloaded_files:
+            logger.error(f"No files found matching pattern: {file_id}.*")
+            logger.error(f"Files in temp dir: {list(TEMP_DIR.glob('*'))}")
+            raise FileNotFoundError(f"Downloaded file not found for {file_id}")
+        
+        downloaded_file = str(downloaded_files[0])
+        logger.info(f"Successfully downloaded: {downloaded_file}")
+        return downloaded_file
     
+    except FileNotFoundError as e:
+        logger.error(f"Cookies file error: {str(e)}")
+        raise ValueError(
+            "Authentication required. The cookies.txt file is missing or invalid."
+        )
     except Exception as e:
-        logger.error(f"Error downloading video: {str(e)}")
+        error_msg = str(e)
+        logger.error(f"Error downloading video: {error_msg}")
+        
+        # Check if it's a bot detection error
+        if "Sign in to confirm you're not a bot" in error_msg:
+            raise ValueError(
+                "YouTube bot detection triggered. The authentication cookies have expired. "
+                "Please export fresh cookies and update the cookies.txt file."
+            )
         raise
